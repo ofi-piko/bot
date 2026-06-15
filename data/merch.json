@@ -1,0 +1,42 @@
+[
+    {
+        "name": "Оверсайз одежда от Ofi",
+        "price": 20000,
+        "photo": ""
+    },
+    {
+        "name": "Оверсайз одежда от Ofi С принтом Сардора",
+        "price": 20000,
+        "photo": ""
+    },
+    {
+        "name": "Фигурка от Ofi",
+        "price": 100000,
+        "photo": ""
+    },
+    {
+        "name": "Рашгард от Ofi С принтом Сардора",
+        "price": 100000,
+        "photo": ""
+    },
+    {
+        "name": "Фигурка Monkey Luffy",
+        "price": 260000,
+        "photo": ""
+    },
+    {
+        "name": "Фигурка Levi Ackerman",
+        "price": 240000,
+        "photo": ""
+    },
+    {
+        "name": "Фигурка Tanjiro Kamado",
+        "price": 220000,
+        "photo": ""
+    },
+    {
+        "name": "Фигурка Mikasa Ackerman",
+        "price": 230000,
+        "photo": ""
+    }
+]

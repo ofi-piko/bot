@@ -1,497 +1,281 @@
+import random
 import json
 import asyncio
 import logging
 import sys
 import os
-import re
-from time import time
 
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message,
-    CallbackQuery,
+    FSInputFile,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
     InlineKeyboardMarkup,
-    InlineKeyboardButton
+    InlineKeyboardButton,
 )
+from aiogram.filters import Command
 
-TOKEN = "8935821147:AAHwYio_ZEW4MwFj_pGpl_1XVZ_7GffG8OU"
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
 
-bot = Bot(token=TOKEN)
+
 dp = Dispatcher()
 
-
-# Caching for data.json to avoid repeated file reads
-_DATA_CACHE = {"mtime": 0, "data": None}
-
-
-def load_data():
-    global _DATA_CACHE
-    path = os.path.join(os.path.dirname(__file__), "data.json")
-    try:
-        mtime = os.path.getmtime(path)
-    except Exception:
-        mtime = 0
-
-    if _DATA_CACHE["data"] is None or mtime > _DATA_CACHE["mtime"]:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                _DATA_CACHE["data"] = json.load(f)
-                _DATA_CACHE["mtime"] = mtime
-        except Exception:
-            _DATA_CACHE["data"] = {}
-            _DATA_CACHE["mtime"] = mtime
-
-    return _DATA_CACHE["data"]
+with open("data/surprise.json", "r", encoding="utf-8") as f:
+    SURPRISE_DATA = json.load(f)
 
 
-# Image index to avoid repeated os.walk calls
-IMAGES_DIR = os.path.join(os.path.dirname(__file__), "images")
-ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-_IMG_INDEX = None
+async def send_products(message: Message, filename: str):
+    path = f"data/{filename}"
+
+    if not os.path.exists(path):
+        await message.answer("Файл не найден.")
+        return
+
+    with open(path, "r", encoding="utf-8") as f:
+        products = json.load(f)
+
+    text = ""
+
+    for i, product in enumerate(products, start=1):
+        text += (
+            f"{i}. {product['name']}\n"
+            f"Цена: {product['price']:,} сум\n\n"
+        )
+
+    await message.answer(text)
 
 
-def build_image_index():
-    """Build a simple in-memory index: list of (path, lowername)."""
-    global _IMG_INDEX
-    entries = []
-    for root, _, filenames in os.walk(IMAGES_DIR):
-        for fn in filenames:
-            ext = os.path.splitext(fn)[1].lower()
-            if ext not in ALLOWED_EXTS:
-                continue
-            path = os.path.join(root, fn)
-            # use relative path from IMAGES_DIR for matching
-            rel = os.path.relpath(path, IMAGES_DIR)
-            entries.append((path, rel.replace("\\", "/").lower()))
-    _IMG_INDEX = entries
+async def send_photo(message: Message, path: str, caption: str):
+    if not os.path.isfile(path):
+        await message.answer(f"Файл не найден:\n{path}")
+        return
 
-
-def ensure_image_index():
-    global _IMG_INDEX
-    if _IMG_INDEX is None:
-        build_image_index()
-
-
-def find_image_for(category, character, style=None):
-    ensure_image_index()
-    cat_token = str(category).lower()
-    char_token = str(character).lower()
-    style_token = str(style).lower() if style else None
-
-    best = None
-    for path, lname in _IMG_INDEX:
-        if cat_token in lname and char_token in lname:
-            if style_token and style_token in lname:
-                return path
-            if best is None:
-                best = path
-
-    if best:
-        return best
-
-    for path, lname in _IMG_INDEX:
-        if char_token in lname:
-            return path
-
-    for path, lname in _IMG_INDEX:
-        if cat_token in lname:
-            return path
-
-    for path, lname in _IMG_INDEX:
-        if "default" in lname:
-            return path
-
-    return None
-
-
-def list_styles_for(category, character):
-    """Scan images folder and return list of style tokens available for this character.
-
-    Returns list of style strings (e.g. 'school', 'work', 'street', 'default').
-    """
-    ensure_image_index()
-    cat_token = str(category).lower()
-    char_token = str(character).lower()
-
-    styles = []
-    for _, lname in _IMG_INDEX:
-        if cat_token in lname and char_token in lname:
-            s = os.path.splitext(lname)[0]
-            s = s.replace(cat_token, "")
-            s = s.replace(char_token, "")
-            for ch in ["_", "-", " ", ".", "/"]:
-                s = s.replace(ch, " ")
-            s = s.strip()
-            if not s:
-                style = "default"
-            else:
-                tokens = [tok for tok in s.split() if tok]
-                style = tokens[-1] if tokens else "default"
-            if style not in styles:
-                styles.append(style)
-
-    return styles
-
-
-@dp.message(CommandStart())
-async def cmd_start(message: Message):
-    await message.answer(
-        "Привет! OFI Shop активен.\n" \
-        "Используй /menu для навигации или /catalog для входа в каталог."
+    await message.answer_photo(
+        photo=FSInputFile(path),
+        caption=caption
     )
 
 
-@dp.message(Command("menu"))
-async def cmd_menu(message: Message):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📦 Каталог", callback_data="catalog_button")],
-        [InlineKeyboardButton(text="❓ Помощь", callback_data="help:menu")]
-    ])
-    await message.answer("Меню OFI Shop:", reply_markup=keyboard)
+main_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [
+            KeyboardButton(text="🛍️ Каталог"),
+            KeyboardButton(text="ℹ️ О нас"),
+            KeyboardButton(text="🧑‍💻 Поддержка"),
+        ],
+        [
+            KeyboardButton(text="☕ дать мне на кофе или энергетик"),
+        ]
+    ],
+    resize_keyboard=True
+)
 
 
-@dp.message(Command("help"))
-async def cmd_help(message: Message):
-    await message.answer(
-        "/menu — главное меню\n"
-        "/catalog — открыть каталог\n"
-        "Выбирай персонажа, затем стиль и выбирай, что купить.\n"
-        "После выбора заказа бот выдаст QR-код суммы."
+async def cmd_start(message: Message):
+    photo_path = "images/main/start.png"
+
+    caption_text = (
+        "Привет! Добро пожаловать в официальный мерч-шоп ofi_piko ✨\n\n"
+        "Здесь собрано всё самое уютное и эксклюзивное. Помогу тебе выбрать крутой дроп и быстро оформить заказ.\n\n"
+        "Нажимай на кнопки меню, чтобы начать шопинг! 👇"
+    )
+
+    if not os.path.isfile(photo_path):
+        await message.answer(
+            caption_text,
+            reply_markup=main_menu
+        )
+        return
+
+    await message.answer_photo(
+        photo=FSInputFile(photo_path),
+        caption=caption_text,
+        reply_markup=main_menu
+    )
+
+
+
+@dp.message(F.text == "☕ дать мне на кофе")
+async def coffee(message: Message):
+    photo_path = "images/main/coffe.png"
+    
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="☕ Перейти к покупке мне на кофе или энергетик",
+                    url="https://www.donationalerts.com/r/ofi_piko"
+                )
+            ]
+        ]
+    )
+    
+    if photo_path not in image_cache:
+        image_cache[photo_path] = FSInputFile(photo_path)
+    
+    await message.answer_photo(
+        photo=image_cache[photo_path],
+        caption="Спасибо за поддержку ❤️",
+        reply_markup=kb
+    )
+
+#-----------------------------------------------------------------
+
+@dp.message(Command("clothes"))
+async def clothes(message: Message):
+    await send_products(message, "clothes.json")
+
+
+@dp.message(Command("accessories"))
+async def accessories(message: Message):
+    await send_products(message, "accessories.json")
+
+
+@dp.message(Command("fan"))
+async def fan(message: Message):
+    await send_products(message, "fan.json")
+
+
+@dp.message(Command("merch"))
+async def merch(message: Message):
+    await send_products(message, "merch.json")
+
+
+@dp.message(Command("posters"))
+async def posters(message: Message):
+    await send_products(message, "posters.json")
+
+
+@dp.message(Command("all"))
+async def allgets(message: Message):
+    await send_products(message, "all.json")
+
+
+@dp.message(Command("gadgets"))
+async def gadgets(message: Message):
+    await send_products(message, "gadgets.json")
+
+@dp.message(Command("surprise"))
+async def gadgets(message: Message):
+    await message.answer("функция не добавленна ещё")
+
+
+
+#-----------------------------------------------------------------
+
+
+
+
+
+@dp.message(Command("start"))
+async def cmd_start(message: Message):
+    photo_path = "images/main/start.png"
+
+    caption_text = (
+        "Привет! Добро пожаловать в официальный мерч-шоп ofi_piko ✨\n\n"
+        "Здесь собрано всё самое уютное и эксклюзивное. Помогу тебе выбрать крутой дроп и быстро оформить заказ.\n\n"
+        "Нажимай на кнопки меню, чтобы начать шопинг! 👇"
+    )
+
+    if not os.path.isfile(photo_path):
+        await message.answer(
+            caption_text,
+            reply_markup=main_menu
+        )
+        return
+
+    await message.answer_photo(
+        photo=FSInputFile(photo_path),
+        caption=caption_text,
+        reply_markup=main_menu
     )
 
 
 @dp.message(Command("catalog"))
 async def cmd_catalog(message: Message):
-    data = load_data()
-    keyboard = [
-        [InlineKeyboardButton(text=cat, callback_data=f"cat:{cat}")]
-        for cat in data.keys()
-    ]
-    # Add a help/close row
-    keyboard.append([
-        InlineKeyboardButton(text="❓ Помощь", callback_data="help:catalog"),
-        InlineKeyboardButton(text="✖️ Закрыть", callback_data="close:catalog")
-    ])
-
-    await message.answer(
-        "📦 Выбери категорию:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+    await send_photo(
+        message,
+        "images/main/caterygory.png",
+        "Привет! Это каталог."
     )
 
 
-@dp.callback_query(F.data == "catalog_button")
-async def catalog_button(call: CallbackQuery):
-    await call.answer()
-    await cmd_catalog(call.message)
+@dp.message(F.text == "🛍️ Каталог")
+async def catalog_button(message: Message):
+    await send_photo(
+        message,
+        "images/main/caterygory.png",
+        """
+🛍️ Каталог OFI-SHOP
 
+👕 Одежда
+/clothes
 
-@dp.callback_query(F.data.startswith("cat:"))
-async def open_category(call: CallbackQuery):
-    category = call.data.split(":")[1]
-    data = load_data()
+🧢 Аксессуары
+/accessories
 
-    await call.answer()
+⭐ Фанатские товары
+/fan
 
-    category_data = data.get(category)
+🎎 Фигурки и мерч
+/merch
 
-    # Detect whether this category maps to characters (dict of dicts)
-    is_characters = False
-    if isinstance(category_data, dict):
-        # If all values are dicts (character -> sections), treat as characters
-        if all(isinstance(v, dict) for v in category_data.values()):
-            is_characters = True
+🖼️ Постеры и принты
+/posters
 
-    if is_characters:
-        keyboard = [
-            [InlineKeyboardButton(text=char, callback_data=f"char:{category}:{char}")]
-            for char in category_data.keys()
-        ]
-        keyboard.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back:catalog")])
+📱 Гаджеты
+/gadgets
 
-        await call.message.edit_text(
-            f"🎭 {category}",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
-        )
-    else:
-        # Category directly contains sections/items — show items list
-        text = f"🎭 {category}\n"
-        for section, goods in (category_data or {}).items():
-            text += f"\n📁 {section.upper()}\n"
-            for item in goods:
-                text += f"• {item.get('name')} — {item.get('price')}\n"
+🎁 Всё подряд
+/all
 
-        keyboard = [[InlineKeyboardButton(text="⬅️ Назад", callback_data="back:catalog")]]
-
-        # Try to edit original message; fallback to new message if edit fails
-        try:
-            await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
-        except Exception:
-            await call.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
-
-
-@dp.callback_query(F.data.startswith("char:"))
-async def open_character(call: CallbackQuery):
-    _, category, character = call.data.split(":")
-    data = load_data()
-
-    # Build text description for the character
-    items = data.get(category, {}).get(character, {})
-
-    text = f"👤 {character}\n\n"
-    for section, goods in items.items():
-        text += f"\n📁 {section.upper()}\n"
-        for item in goods:
-            text += f"• {item.get('name')} — {item.get('price')}\n"
-
-    await call.answer()
-
-    # Find available styles from image filenames
-    styles = list_styles_for(category, character)
-
-    if not styles:
-        # No style options: show default immediately
-        img_path = find_image_for(category, character)
-        buttons = [
-            [InlineKeyboardButton(text="⬅️ Назад к персонажам", callback_data=f"cat:{category}")],
-            [InlineKeyboardButton(text="🏠 В каталог", callback_data="back:catalog")]
-        ]
-
-        if img_path and os.path.exists(img_path):
-            with open(img_path, "rb") as f:
-                await call.message.answer_photo(
-                    photo=f,
-                    caption=text,
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
-                )
-        else:
-            await call.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-        return
-
-    # Build keyboard of styles
-    STYLE_LABELS = {"school": "Школьный", "work": "Рабочий", "street": "Уличный", "default": "Обычный"}
-    kb = []
-    for s in styles:
-        kb.append([
-            InlineKeyboardButton(
-                text=STYLE_LABELS.get(s, s.capitalize()),
-                callback_data=f"style:{category}:{character}:{s}"
-            )
-        ])
-
-    kb.append([InlineKeyboardButton(text="⬅️ Назад к персонажам", callback_data=f"cat:{category}")])
-
-    img_path = find_image_for(category, character)
-    if img_path and os.path.exists(img_path):
-        try:
-            with open(img_path, "rb") as f:
-                await call.message.answer_photo(
-                    photo=f,
-                    caption=text + "\nВыбери стиль внешнего вида:",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=kb)
-                )
-            return
-        except Exception:
-            pass
-
-    # Fallback text with buttons
-    try:
-        await call.message.edit_text(text + "\nВыбери стиль внешнего вида:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
-    except Exception:
-        await call.message.answer(text + "\nВыбери стиль внешнего вида:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
-
-
-@dp.callback_query(F.data == "back:catalog")
-async def back_to_catalog(call: CallbackQuery):
-    await call.answer()
-    await cmd_catalog(call.message)
-
-
-@dp.callback_query(F.data == "close:catalog")
-async def close_catalog(call: CallbackQuery):
-    await call.answer("Закрыто.")
-    try:
-        await call.message.delete()
-    except Exception:
-        pass
-
-
-@dp.callback_query(F.data.startswith("help:"))
-async def help_callback(call: CallbackQuery):
-    await call.answer()
-    await call.message.answer(
-        "/menu — главное меню\n"
-        "/catalog — открыть каталог\n"
-        "Выбирай персонажа, затем стиль и что купить.\n"
-        "После заказа бот выдаст QR к оплате."
+❓ Сюрпризы
+/surprise
+        """
     )
 
 
-PRICE_RE = re.compile(r"\d+[\.,]?\d*")
-
-
-def extract_price_value(price_text):
-    if not price_text:
-        return None
-    normalized = price_text.replace("$", "").replace("₽", "").replace("USD", "").replace("EUR", "")
-    normalized = normalized.replace("–", "-").replace("—", "-")
-    parts = PRICE_RE.findall(normalized)
-    if not parts:
-        return None
-    values = []
-    for part in parts:
-        try:
-            values.append(float(part.replace(",", ".")))
-        except ValueError:
-            continue
-    if not values:
-        return None
-    if "-" in normalized:
-        return sum(values) / len(values)
-    return values[0]
-
-
-def calculate_section_amount(items, section):
-    section_items = items.get(section, [])
-    total = 0.0
-    count = 0
-    for item in section_items:
-        price = extract_price_value(item.get("price", ""))
-        if price is not None:
-            total += price
-            count += 1
-    return total if count else None
-
-
-def calculate_total_amount(items):
-    total = 0.0
-    count = 0
-    for section_items in items.values():
-        for item in section_items:
-            price = extract_price_value(item.get("price", ""))
-            if price is not None:
-                total += price
-                count += 1
-    return total if count else None
-
-
-def make_payment_payload(amount):
-    return f"https://pay.example.com/checkout?amount={amount:.2f}"
-
-
-def generate_qr_image(data, path):
-    try:
-        import qrcode
-    except ImportError:
-        return False
-    qr = qrcode.QRCode(border=2)
-    qr.add_data(data)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    img.save(path)
-    return True
-
-
-@dp.callback_query(F.data.startswith("style:"))
-async def show_style(call: CallbackQuery):
-    # style:<category>:<character>:<style>
-    parts = call.data.split(":")
-    if len(parts) < 4:
-        await call.answer()
-        return
-
-    _, category, character, style = parts
-    data = load_data()
-
-    items = data.get(category, {}).get(character, {})
-
-    text = f"👤 {character} — {style.capitalize()}\n\n"
-    for section, goods in items.items():
-        text += f"\n📁 {section.upper()}\n"
-        for item in goods:
-            text += f"• {item.get('name')} — {item.get('price')}\n"
-
-    await call.answer()
-
-    # Try to find an image matching category + character + style
-    found = find_image_for(category, character, style)
-
-    if not found:
-        # fallback to any image for character
-        found = find_image_for(category, character)
-
-    buttons = [
-        [InlineKeyboardButton(text="👖 Штаны", callback_data=f"order:{category}:{character}:{style}:bottoms")],
-        [InlineKeyboardButton(text="💍 Украшение", callback_data=f"order:{category}:{character}:{style}:accessories")],
-        [InlineKeyboardButton(text="🛍️ Купить всё", callback_data=f"order:{category}:{character}:{style}:all")],
-        [InlineKeyboardButton(text="⬅️ Назад к стилям", callback_data=f"char:{category}:{character}")],
-        [InlineKeyboardButton(text="🏠 В каталог", callback_data="back:catalog")]
-    ]
-
-    if found and os.path.exists(found):
-        with open(found, "rb") as f:
-            await call.message.answer_photo(photo=f, caption=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-    else:
-        await call.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-
-
-@dp.callback_query(F.data.startswith("order:"))
-async def order_item(call: CallbackQuery):
-    parts = call.data.split(":")
-    if len(parts) != 5:
-        await call.answer()
-        return
-
-    _, category, character, style, section = parts
-    data = load_data()
-    items = data.get(category, {}).get(character, {})
-
-    if section == "all":
-        amount = calculate_total_amount(items)
-        label = "всё"
-    else:
-        amount = calculate_section_amount(items, section)
-        label = section
-
-    if amount is None:
-        amount = 100.0
-
-    amount = round(amount, 2)
-    payload = make_payment_payload(amount)
-    qr_path = os.path.join(os.path.dirname(__file__), "tmp_qr.png")
-    qr_created = generate_qr_image(payload, qr_path)
-
-    caption = (
-        f"Заказ: {character} — {style.capitalize()} — {label}\n"
-        f"Сумма: {amount:.2f}$\n"
-        "Сканируй QR для оплаты."
+@dp.message(F.text == "ℹ️ О нас")
+async def about_us(message: Message):
+    text = (
+        "👋 Добро пожаловать в ofi_shop!\n\n"
+        "Мы создаём уникальный мерч, аксессуары, товары для фанатов, "
+        "аксессуары для телефонов и коллекционные вещи.\n\n"
+        "🔥 Почему выбирают нас:\n"
+        "🧵 Качественные материалы и пошив.\n"
+        "🎨 Вышивка вместо обычных принтов.\n"
+        "📦 Доставка по всему миру.\n"
+        "👕 Полная кастомизация под ваш стиль.\n\n"
+        "🌟 Особая услуга:\n"
+        "Не нашли нужную вещь? Мы можем воссоздать образ любимого персонажа "
+        "или героя и адаптировать его под ваши размеры и пожелания.\n\n"
+        "Выберите действие ниже 👇"
     )
 
-    await call.answer()
-    if qr_created and os.path.exists(qr_path):
-        with open(qr_path, "rb") as f:
-            await call.message.answer_photo(photo=f, caption=caption)
-        try:
-            os.remove(qr_path)
-        except Exception:
-            pass
-    else:
-        await call.message.answer(caption + f"\nПлатёжная ссылка: {payload}")
+    await message.answer(text)
+
+
+@dp.message(F.text == "🧑‍💻 Поддержка")
+async def support(message: Message):
+    text = (
+        "🧑‍💻 Поддержка ofi_shop\n\n"
+        "Есть вопрос по заказу, доставке, размеру или кастомизации?\n\n"
+        "💬 Telegram: @ofi_piko\n"
+        "📧 Email: ofipiko@gmail.com\n\n"
+        "⏰ Рабочее время:\n"
+        "10:00 - 01:00 (UTC+5)"
+    )
+
+    await message.answer(text)
 
 
 async def main():
-    await bot.delete_webhook(drop_pending_updates=True)
+    bot = Bot(token=TOKEN)
     await dp.start_polling(bot)
-
-
-@dp.message(Command("refresh_cache"))
-async def cmd_refresh_cache(message: Message):
-    """Dev command to rebuild caches without restarting the bot."""
-    build_image_index()
-    # clear data cache so next load reads file
-    global _DATA_CACHE
-    _DATA_CACHE["data"] = None
-    await message.answer("Кеши обновлены.")
 
 
 if __name__ == "__main__":

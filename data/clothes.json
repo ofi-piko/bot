@@ -1,0 +1,27 @@
+[
+    {
+        "name": "Oversize футболка",
+        "price": 120000,
+        "photo": ""
+    },
+    {
+        "name": "Худи Black",
+        "price": 250000,
+        "photo": ""
+    },
+    {
+        "name": "Рашгард Чёрный holy ver",
+        "price": 220000,
+        "photo": ""
+    },
+    {
+        "name": "Джоггеры XXXL размер серые",
+        "price": 400000,
+        "photo": ""
+    },
+    {
+        "name": "Джоггеры XXXL размер Чёрные",
+        "price": 350000,
+        "photo": ""
+    }
+]
